@@ -1,0 +1,63 @@
+mkdir -p /home/claude/final && cd /home/claude/final
+cat > build.yml <<'EOF'
+name: Build DAYFORM APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Keep the same signing key between builds (so updates keep your data)
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: dayform-keystore-v1
+      - name: Wrap index.html into an Android project
+        run: |
+          mkdir www && cp index.html www/
+          npm init -y
+          npm i @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/local-notifications@6 @capacitor/filesystem@6 @capacitor/share@6
+          npx cap init DAYFORM app.dayform.app --web-dir www
+          npx cap add android
+          npx cap sync android
+          sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <application#' android/app/src/main/AndroidManifest.xml
+      - name: App icon
+        run: |
+          sudo apt-get install -y librsvg2-bin
+          cat > icon.svg <<'SVG'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#111311"/><path d="M256 96a160 160 0 1 1-113 46" fill="none" stroke="#C8F169" stroke-width="40" stroke-linecap="round"/><path d="M180 262l54 54 100-124" fill="none" stroke="#C8F169" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          SVG
+          R=android/app/src/main/res
+          rm -rf $R/mipmap-anydpi-v26
+          for p in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+            d=${p%%:*}; s=${p##*:}
+            for n in ic_launcher ic_launcher_round ic_launcher_foreground; do
+              rsvg-convert -w $s -h $s icon.svg > $R/mipmap-$d/$n.png
+            done
+          done
+      - name: Build APK
+        run: cd android && chmod +x gradlew && ./gradlew assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DAYFORM-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish release (direct APK download)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk DAYFORM.apk
+          gh release create "build-${{ github.run_number }}" DAYFORM.apk --title "DAYFORM build ${{ github.run_number }}" --notes "Install DAYFORM.apk on your Android phone."
+EOF
+echo ok
